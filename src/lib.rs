@@ -49,13 +49,11 @@
 //! always_pass_on_severity_at_least = "debug"
 //!
 //! [[filter_config.passes]]
-//! key = "key1"
-//! value = "value1"
+//! keys_and_values = [["system", "SystemA"], ["subsystem", "SubsystemAB"]]
 //! severity_at_least = "trace"
 //!
 //! [[filter_config.passes]]
-//! key = "key2"
-//! value = "value2"
+//! keys_and_values = [["system", "SystemC"]]
 //! severity_at_least = "debug"
 //! "#).unwrap();
 //!

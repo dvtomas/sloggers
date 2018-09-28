@@ -81,9 +81,9 @@ impl TerminalLoggerBuilder {
     }
 
     fn build_with_drain<D>(&self, drain: D) -> Logger
-        where
-            D: Drain + Send + 'static,
-            D::Err: Debug,
+    where
+        D: Drain + Send + 'static,
+        D::Err: Debug,
     {
         // async inside, level and key value filters outside for speed
         let drain = Async::new(drain.fuse())
@@ -188,8 +188,8 @@ impl slog_term::Decorator for Decorator {
         logger_values: &slog::OwnedKVList,
         f: F,
     ) -> io::Result<()>
-        where
-            F: FnOnce(&mut slog_term::RecordDecorator) -> io::Result<()>,
+    where
+        F: FnOnce(&mut slog_term::RecordDecorator) -> io::Result<()>,
     {
         match *self {
             Decorator::Term(ref d) => d.with_record(record, logger_values, f),

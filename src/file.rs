@@ -129,9 +129,9 @@ impl FileLoggerBuilder {
     }
 
     fn build_with_drain<D>(&self, drain: D) -> Logger
-        where
-            D: Drain + Send + 'static,
-            D::Err: Debug,
+    where
+        D: Drain + Send + 'static,
+        D::Err: Debug,
     {
         // async inside, level and key value filters outside for speed
         let drain = Async::new(drain.fuse())
@@ -519,7 +519,8 @@ mod tests {
         let logger = FileLoggerBuilder::new(dir.path().join("foo.log"))
             .rotate_size(128)
             .rotate_keep(2)
-            .build().unwrap();
+            .build()
+            .unwrap();
 
         info!(logger, "hello");
         thread::sleep(Duration::from_millis(50));
@@ -589,7 +590,8 @@ mod tests {
         let path_template = dir.path()
             .join("foo_{timestamp}.log")
             .to_str()
-            .ok_or(ErrorKind::Invalid).unwrap()
+            .ok_or(ErrorKind::Invalid)
+            .unwrap()
             .to_string();
         let actual = path_template_to_path(
             &path_template,

@@ -64,13 +64,11 @@ pub trait Config {
 /// always_pass_on_severity_at_least = "info"
 ///
 /// [[filter_config.passes]]
-/// key = "key1"
-/// value = "value1"
+/// keys_and_values = [["system", "SystemA"], ["subsystem", "SubsystemAB"]]
 /// severity_at_least = "trace"
 ///
 /// [[filter_config.passes]]
-/// key = "key2"
-/// value = "value2"
+/// keys_and_values = [["system", "SystemC"]]
 /// severity_at_least = "debug"
 /// "#;
 /// let _config: LoggerConfig = serdeconv::from_toml_str(toml).unwrap();
@@ -104,14 +102,13 @@ pub trait Config {
 /// type = "PassOnAnyOf"
 /// always_pass_on_severity_at_least = "info"
 ///
+///
 /// [[filter_config.passes]]
-/// key = "key1"
-/// value = "value1"
+/// keys_and_values = [["system", "SystemA"], ["subsystem", "SubsystemAB"]]
 /// severity_at_least = "trace"
 ///
 /// [[filter_config.passes]]
-/// key = "key2"
-/// value = "value2"
+/// keys_and_values = [["system", "SystemC"]]
 /// severity_at_least = "debug"
 /// "#;
 /// let _config: LoggerConfig = serdeconv::from_toml_str(toml).unwrap();
@@ -150,17 +147,20 @@ impl Default for LoggerConfig {
 mod tests {
     extern crate serdeconv;
 
+    use file::FileLoggerConfig;
     use terminal::TerminalLoggerConfig;
     use types::{FilterConfig, PassIfMatch, Severity};
     use LoggerConfig;
-    use file::FileLoggerConfig;
 
     fn sample_filter_config() -> FilterConfig {
         FilterConfig::PassOnAnyOf {
             always_pass_on_severity_at_least: Severity::Info,
             passes: vec![
-                PassIfMatch::new("key1", "value1", Severity::Trace),
-                PassIfMatch::new("key2", "value2", Severity::Debug),
+                PassIfMatch::new(
+                    &[("system", "SystemA"), ("subsystem", "SubsystemAB")],
+                    Severity::Trace,
+                ),
+                PassIfMatch::new(&[("system", "SystemC")], Severity::Debug),
             ],
         }
     }
@@ -172,7 +172,7 @@ mod tests {
         let config: LoggerConfig = LoggerConfig::Terminal(terminal_logger_config);
 
         let config_string = serdeconv::to_toml_string(&config).unwrap();
-//        eprintln!("{}", config_string);
+        //        eprintln!("{}", config_string);
 
         let config_again: LoggerConfig = serdeconv::from_toml_str(&config_string).unwrap();
         assert_eq!(config_again, config);
@@ -185,7 +185,7 @@ mod tests {
         let config: LoggerConfig = LoggerConfig::File(file_logger_config);
 
         let config_string = serdeconv::to_toml_string(&config).unwrap();
-//        eprintln!("{}", config_string);
+        //        eprintln!("{}", config_string);
 
         let config_again: LoggerConfig = serdeconv::from_toml_str(&config_string).unwrap();
         assert_eq!(config_again, config);

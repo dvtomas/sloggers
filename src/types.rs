@@ -190,31 +190,38 @@ impl FromStr for SourceLocation {
     }
 }
 
-/// Pass a message if any key-value pair matches `key` and `value` and severity is at least `severity_at_least`.
+/// Pass a message if: For any entry in `keys_and_values` all the keys and values
+/// in that entry have corresponding keys and values in the message AND the
+/// severity for that entry is at least `severity_at_least`
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct PassIfMatch {
-    /// Key that must match in the key-value pair
-    pub key: String,
-    /// Value that must match in the key-value pair
-    pub value: String,
+    /// Key-value pairs that must all match in the key-value pair
+    pub keys_and_values: Vec<(String, String)>,
     /// Severity must be at least this in order for the message to pass
     pub severity_at_least: Severity,
 }
 
 impl PassIfMatch {
     /// Creates a new PassIfMatch struct
-    pub fn new(key: impl ToString, value: impl ToString, severity: Severity) -> Self {
+    pub fn new(keys_and_values: &[(impl ToString, impl ToString)], severity: Severity) -> Self {
         PassIfMatch {
-            key: key.to_string(),
-            value: value.to_string(),
+            keys_and_values: keys_and_values
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect(),
             severity_at_least: severity,
         }
     }
 
     /// Builds a `FilterSpec` from this struct
     pub fn to_filter_spec(&self) -> FilterSpec {
+        let match_filters: Vec<_> = self.keys_and_values
+            .iter()
+            .map(|(key, value)| FilterSpec::match_kv(key, value))
+            .collect();
+
         FilterSpec::LevelAtLeast(self.severity_at_least.as_level())
-            .and(FilterSpec::match_kv(self.key.clone(), self.value.clone()))
+            .and(FilterSpec::all_of(&match_filters))
     }
 }
 
@@ -223,8 +230,8 @@ impl PassIfMatch {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub enum FilterConfig {
     /// Pass all messages with severity at least `always_pass_on_severity_at_least`
-    /// Also pass any message that matches the Key and Value of any of the variants if the message has
-    /// at least a severity for a given variant
+    /// Also pass any message that matches all the Key and Value pairs of any
+    /// of the variants if the message has at least a severity for a given variant
     PassOnAnyOf {
         /// A message will pass if it's level is at least this
         always_pass_on_severity_at_least: Severity,
@@ -236,7 +243,7 @@ pub enum FilterConfig {
     Custom {
         /// Arbitrary configuration of a filter. There may be problems serializing these specifications to TOML,
         /// consider using JSON when using `FilterConfig::Custom`.
-        filter_spec: FilterSpec
+        filter_spec: FilterSpec,
     },
 }
 
@@ -268,10 +275,8 @@ impl FilterConfig {
                 passes,
                 always_pass_on_severity_at_least,
             } => {
-                let variant_filters: Vec<_> = passes
-                    .iter()
-                    .map(|elem| elem.to_filter_spec())
-                    .collect();
+                let variant_filters: Vec<_> =
+                    passes.iter().map(|elem| elem.to_filter_spec()).collect();
                 FilterSpec::LevelAtLeast(always_pass_on_severity_at_least.as_level())
                     .or(FilterSpec::any_of(&variant_filters))
             }
