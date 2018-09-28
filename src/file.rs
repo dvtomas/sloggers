@@ -3,7 +3,7 @@ use chrono::{DateTime, Local, TimeZone as ChronoTimeZone, Utc};
 use libflate::gzip::Encoder as GzipEncoder;
 use slog::{Drain, FnValue, Logger};
 use slog_async::Async;
-use slog_kvfilter::{KVFilter, KVFilterList};
+use slog_kvfilter::{EvaluationOrder, KVFilter, KVFilterConfig};
 use slog_term::{CompactFormat, FullFormat, PlainDecorator};
 use std::fmt::Debug;
 use std::fs::{self, File, OpenOptions};
@@ -12,9 +12,8 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
 
-use misc::KVFilterParameters;
 use misc::{module_and_line, timezone_to_timestamp_fn};
-use types::{Format, Severity, SourceLocation, TimeZone};
+use types::{FilterConfig, Format, SourceLocation, TimeZone};
 use {Build, Config, ErrorKind, Result};
 
 /// A logger builder which build loggers that write log records to the specified file.
@@ -25,11 +24,12 @@ pub struct FileLoggerBuilder {
     format: Format,
     source_location: SourceLocation,
     timezone: TimeZone,
-    level: Severity,
     appender: FileAppender,
     channel_size: usize,
-    kvfilterparameters: Option<KVFilterParameters>,
+    evaluation_order: EvaluationOrder,
+    filter_config: FilterConfig,
 }
+
 impl FileLoggerBuilder {
     /// Makes a new `FileLoggerBuilder` instance.
     ///
@@ -40,10 +40,10 @@ impl FileLoggerBuilder {
             format: Format::default(),
             source_location: SourceLocation::default(),
             timezone: TimeZone::default(),
-            level: Severity::default(),
             appender: FileAppender::new(path),
             channel_size: 1024,
-            kvfilterparameters: None,
+            evaluation_order: EvaluationOrder::default(),
+            filter_config: FilterConfig::default(),
         }
     }
 
@@ -65,37 +65,26 @@ impl FileLoggerBuilder {
         self
     }
 
-    /// Sets the log level of this logger.
-    pub fn level(&mut self, severity: Severity) -> &mut Self {
-        self.level = severity;
-        self
-    }
-
     /// Sets the size of the asynchronous channel of this logger.
     pub fn channel_size(&mut self, channel_size: usize) -> &mut Self {
         self.channel_size = channel_size;
         self
     }
 
-    /// Sets [`KVFilter`].
-    ///
-    /// [`KVFilter`]: https://docs.rs/slog-kvfilter/0.6/slog_kvfilter/struct.KVFilter.html
-    pub fn kvfilter(
-        &mut self,
-        level: Severity,
-        only_pass_any_on_all_keys: Option<KVFilterList>,
-        always_suppress_any: Option<KVFilterList>,
-    ) -> &mut Self {
-        self.kvfilterparameters = Some(KVFilterParameters {
-            severity: level,
-            only_pass_any_on_all_keys,
-            always_suppress_any,
-        });
+    /// Sets the evaluation order of the KVFilter. See `EvaluationOrder` docs for details.
+    pub fn evaluation_order(&mut self, evaluation_order: EvaluationOrder) -> &mut Self {
+        self.evaluation_order = evaluation_order;
+        self
+    }
+
+    /// Sets the filtering config
+    pub fn filter_config(&mut self, config: FilterConfig) -> &mut Self {
+        self.filter_config = config;
         self
     }
 
     /// By default, logger just appends log messages to file.
-    /// If this method called, logger truncates the file to 0 length when opening.
+    /// This method makes the logger truncate the file to 0 bytes when opening.
     pub fn truncate(&mut self) -> &mut Self {
         self.appender.truncate = true;
         self
@@ -110,7 +99,7 @@ impl FileLoggerBuilder {
     /// This process is iterated recursively until log file names no longer conflict or
     /// [`rotate_keep`] limit reached.
     ///
-    /// The default value is `std::u64::MAX`.
+    /// The default value is `std::u64::MAX / 2`.
     ///
     /// [`rotate_keep`]: ./struct.FileLoggerBuilder.html#method.rotate_keep
     pub fn rotate_size(&mut self, size: u64) -> &mut Self {
@@ -140,9 +129,9 @@ impl FileLoggerBuilder {
     }
 
     fn build_with_drain<D>(&self, drain: D) -> Logger
-    where
-        D: Drain + Send + 'static,
-        D::Err: Debug,
+        where
+            D: Drain + Send + 'static,
+            D::Err: Debug,
     {
         // async inside, level and key value filters outside for speed
         let drain = Async::new(drain.fuse())
@@ -150,31 +139,23 @@ impl FileLoggerBuilder {
             .build()
             .fuse();
 
-        if let Some(ref p) = self.kvfilterparameters {
-            let kvdrain = KVFilter::new(drain, p.severity.as_level())
-                .always_suppress_any(p.always_suppress_any.clone())
-                .only_pass_any_on_all_keys(p.only_pass_any_on_all_keys.clone());
-
-            let drain = self.level.set_level_filter(kvdrain.fuse());
-
-            match self.source_location {
-                SourceLocation::None => Logger::root(drain.fuse(), o!()),
-                SourceLocation::ModuleAndLine => {
-                    Logger::root(drain.fuse(), o!("module" => FnValue(module_and_line)))
-                }
-            }
-        } else {
-            let drain = self.level.set_level_filter(drain.fuse());
-
-            match self.source_location {
-                SourceLocation::None => Logger::root(drain.fuse(), o!()),
-                SourceLocation::ModuleAndLine => {
-                    Logger::root(drain.fuse(), o!("module" => FnValue(module_and_line)))
-                }
+        let filter_spec = self.filter_config.to_filter_spec();
+        let kv_filter = KVFilter::new_from_config(
+            drain,
+            KVFilterConfig {
+                filter_spec,
+                evaluation_order: self.evaluation_order,
+            },
+        );
+        match self.source_location {
+            SourceLocation::None => Logger::root(kv_filter.fuse(), o!()),
+            SourceLocation::ModuleAndLine => {
+                Logger::root(kv_filter.fuse(), o!("module" => FnValue(module_and_line)))
             }
         }
     }
 }
+
 impl Build for FileLoggerBuilder {
     fn build(&self) -> Result<Logger> {
         let decorator = PlainDecorator::new(self.appender.clone());
@@ -204,6 +185,7 @@ struct FileAppender {
     rotate_compress: bool,
     wait_compression: Option<mpsc::Receiver<io::Result<()>>>,
 }
+
 impl Clone for FileAppender {
     fn clone(&self) -> Self {
         FileAppender {
@@ -218,6 +200,7 @@ impl Clone for FileAppender {
         }
     }
 }
+
 impl FileAppender {
     pub fn new<P: AsRef<Path>>(path: P) -> Self {
         FileAppender {
@@ -340,6 +323,7 @@ impl FileAppender {
         Ok(())
     }
 }
+
 impl Write for FileAppender {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.reopen_if_needed()?;
@@ -367,12 +351,8 @@ impl Write for FileAppender {
 }
 
 /// The configuration of `FileLoggerBuilder`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FileLoggerConfig {
-    /// Log level.
-    #[serde(default)]
-    pub level: Severity,
-
     /// Log record format.
     #[serde(default)]
     pub format: Format,
@@ -433,7 +413,15 @@ pub struct FileLoggerConfig {
     /// The default value is `false`.
     #[serde(default)]
     pub rotate_compress: bool,
+
+    #[serde(default)]
+    /// Sets the evaluation order of the KVFilter. See `EvaluationOrder` docs for details.
+    pub evaluation_order: EvaluationOrder,
+
+    /// Sets the KV Filter config (includes fallback severity).
+    pub filter_config: FilterConfig,
 }
+
 impl Config for FileLoggerConfig {
     type Builder = FileLoggerBuilder;
     fn try_to_builder(&self) -> Result<Self::Builder> {
@@ -442,7 +430,8 @@ impl Config for FileLoggerConfig {
         let path =
             path_template_to_path(path_template, &self.timestamp_template, self.timezone, now);
         let mut builder = FileLoggerBuilder::new(&path);
-        builder.level(self.level);
+        builder.evaluation_order(self.evaluation_order);
+        builder.filter_config(self.filter_config.clone());
         builder.format(self.format);
         builder.source_location(self.source_location);
         builder.timezone(self.timezone);
@@ -456,10 +445,10 @@ impl Config for FileLoggerConfig {
         Ok(builder)
     }
 }
+
 impl Default for FileLoggerConfig {
     fn default() -> Self {
         FileLoggerConfig {
-            level: Severity::default(),
             format: Format::default(),
             source_location: SourceLocation::default(),
             timezone: TimeZone::default(),
@@ -470,6 +459,8 @@ impl Default for FileLoggerConfig {
             rotate_size: default_rotate_size(),
             rotate_keep: default_rotate_keep(),
             rotate_compress: false,
+            evaluation_order: EvaluationOrder::default(),
+            filter_config: FilterConfig::default(),
         }
     }
 }
@@ -498,7 +489,10 @@ fn default_channel_size() -> usize {
 fn default_rotate_size() -> u64 {
     use std::u64;
 
-    u64::MAX
+    // The / 2 is here because TOML deserialization has problems deserializing larger numbers.
+    // I guess internally that has something to with signed/unsigned numbers, but I haven't investigated.
+    // Even 9223372036854775807 bytes should be enough, though :-)
+    u64::MAX / 2
 }
 
 fn default_rotate_keep() -> usize {
@@ -517,15 +511,15 @@ mod tests {
     use tempdir::TempDir;
 
     use super::*;
-    use {Build, ErrorKind, Result};
+    use {Build, ErrorKind};
 
     #[test]
-    fn file_rotation_works() -> Result<()> {
-        let dir = TempDir::new("sloggers_test")?;
+    fn file_rotation_works() {
+        let dir = TempDir::new("sloggers_test").unwrap();
         let logger = FileLoggerBuilder::new(dir.path().join("foo.log"))
             .rotate_size(128)
             .rotate_keep(2)
-            .build()?;
+            .build().unwrap();
 
         info!(logger, "hello");
         thread::sleep(Duration::from_millis(50));
@@ -551,18 +545,17 @@ mod tests {
         assert!(dir.path().join("foo.log.1").exists());
         assert!(dir.path().join("foo.log.2").exists());
         assert!(!dir.path().join("foo.log.3").exists());
-
-        Ok(())
     }
 
     #[test]
-    fn file_gzip_rotation_works() -> Result<()> {
-        let dir = TempDir::new("sloggers_test")?;
+    fn file_gzip_rotation_works() {
+        let dir = TempDir::new("sloggers_test").unwrap();
         let logger = FileLoggerBuilder::new(dir.path().join("foo.log"))
             .rotate_size(128)
             .rotate_keep(2)
             .rotate_compress(true)
-            .build()?;
+            .build()
+            .unwrap();
 
         info!(logger, "hello");
         thread::sleep(Duration::from_millis(50));
@@ -588,18 +581,15 @@ mod tests {
         assert!(dir.path().join("foo.log.1.gz").exists());
         assert!(dir.path().join("foo.log.2.gz").exists());
         assert!(!dir.path().join("foo.log.3.gz").exists());
-
-        Ok(())
     }
 
     #[test]
-    fn test_path_template_to_path() -> Result<()> {
-        let dir = TempDir::new("sloggers_test")?;
-        let path_template = dir
-            .path()
+    fn test_path_template_to_path() {
+        let dir = TempDir::new("sloggers_test").unwrap();
+        let path_template = dir.path()
             .join("foo_{timestamp}.log")
             .to_str()
-            .ok_or(ErrorKind::Invalid)?
+            .ok_or(ErrorKind::Invalid).unwrap()
             .to_string();
         let actual = path_template_to_path(
             &path_template,
@@ -609,7 +599,5 @@ mod tests {
         );
         let expected = dir.path().join("foo_20180918_1019.log");
         assert_eq!(expected, actual);
-
-        Ok(())
     }
 }

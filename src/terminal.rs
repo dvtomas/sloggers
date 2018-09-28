@@ -1,15 +1,13 @@
 //! Terminal logger.
 use slog::{self, Drain, FnValue, Logger};
 use slog_async::Async;
-use slog_kvfilter::KVFilter;
-use slog_kvfilter::KVFilterList;
+use slog_kvfilter::{EvaluationOrder, KVFilter, KVFilterConfig};
 use slog_term::{self, CompactFormat, FullFormat, PlainDecorator, TermDecorator};
 use std::fmt::Debug;
 use std::io;
 
-use misc::KVFilterParameters;
 use misc::{module_and_line, timezone_to_timestamp_fn};
-use types::{Format, Severity, SourceLocation, TimeZone};
+use types::{FilterConfig, Format, SourceLocation, TimeZone};
 use {Build, Config, Result};
 
 /// A logger builder which build loggers that output log records to the terminal.
@@ -21,10 +19,11 @@ pub struct TerminalLoggerBuilder {
     source_location: SourceLocation,
     timezone: TimeZone,
     destination: Destination,
-    level: Severity,
     channel_size: usize,
-    kvfilterparameters: Option<KVFilterParameters>,
+    evaluation_order: EvaluationOrder,
+    filter_config: FilterConfig,
 }
+
 impl TerminalLoggerBuilder {
     /// Makes a new `TerminalLoggerBuilder` instance.
     pub fn new() -> Self {
@@ -33,9 +32,9 @@ impl TerminalLoggerBuilder {
             source_location: SourceLocation::default(),
             timezone: TimeZone::default(),
             destination: Destination::default(),
-            level: Severity::default(),
             channel_size: 1024,
-            kvfilterparameters: None,
+            evaluation_order: EvaluationOrder::default(),
+            filter_config: FilterConfig::default(),
         }
     }
 
@@ -63,39 +62,28 @@ impl TerminalLoggerBuilder {
         self
     }
 
-    /// Sets the log level of this logger.
-    pub fn level(&mut self, severity: Severity) -> &mut Self {
-        self.level = severity;
-        self
-    }
-
     /// Sets the size of the asynchronous channel of this logger.
     pub fn channel_size(&mut self, channel_size: usize) -> &mut Self {
         self.channel_size = channel_size;
         self
     }
 
-    /// Sets [`KVFilter`].
-    ///
-    /// [`KVFilter`]: https://docs.rs/slog-kvfilter/0.6/slog_kvfilter/struct.KVFilter.html
-    pub fn kvfilter(
-        &mut self,
-        level: Severity,
-        only_pass_any_on_all_keys: Option<KVFilterList>,
-        always_suppress_any: Option<KVFilterList>,
-    ) -> &mut Self {
-        self.kvfilterparameters = Some(KVFilterParameters {
-            severity: level,
-            only_pass_any_on_all_keys,
-            always_suppress_any,
-        });
+    /// Sets the evaluation order of the KVFilter. See `EvaluationOrder` docs for details.
+    pub fn evaluation_order(&mut self, evaluation_order: EvaluationOrder) -> &mut Self {
+        self.evaluation_order = evaluation_order;
+        self
+    }
+
+    /// Sets the filtering config
+    pub fn filter_config(&mut self, config: FilterConfig) -> &mut Self {
+        self.filter_config = config;
         self
     }
 
     fn build_with_drain<D>(&self, drain: D) -> Logger
-    where
-        D: Drain + Send + 'static,
-        D::Err: Debug,
+        where
+            D: Drain + Send + 'static,
+            D::Err: Debug,
     {
         // async inside, level and key value filters outside for speed
         let drain = Async::new(drain.fuse())
@@ -103,36 +91,30 @@ impl TerminalLoggerBuilder {
             .build()
             .fuse();
 
-        if let Some(ref p) = self.kvfilterparameters {
-            let kvdrain = KVFilter::new(drain, p.severity.as_level())
-                .always_suppress_any(p.always_suppress_any.clone())
-                .only_pass_any_on_all_keys(p.only_pass_any_on_all_keys.clone());
+        let filter_spec = self.filter_config.to_filter_spec();
+        let kv_filter = KVFilter::new_from_config(
+            drain,
+            KVFilterConfig {
+                filter_spec,
+                evaluation_order: self.evaluation_order,
+            },
+        );
 
-            let drain = self.level.set_level_filter(kvdrain.fuse());
-
-            match self.source_location {
-                SourceLocation::None => Logger::root(drain.fuse(), o!()),
-                SourceLocation::ModuleAndLine => {
-                    Logger::root(drain.fuse(), o!("module" => FnValue(module_and_line)))
-                }
-            }
-        } else {
-            let drain = self.level.set_level_filter(drain.fuse());
-
-            match self.source_location {
-                SourceLocation::None => Logger::root(drain.fuse(), o!()),
-                SourceLocation::ModuleAndLine => {
-                    Logger::root(drain.fuse(), o!("module" => FnValue(module_and_line)))
-                }
+        match self.source_location {
+            SourceLocation::None => Logger::root(kv_filter.fuse(), o!()),
+            SourceLocation::ModuleAndLine => {
+                Logger::root(kv_filter.fuse(), o!("module" => FnValue(module_and_line)))
             }
         }
     }
 }
+
 impl Default for TerminalLoggerBuilder {
     fn default() -> Self {
         Self::new()
     }
 }
+
 impl Build for TerminalLoggerBuilder {
     fn build(&self) -> Result<Logger> {
         let decorator = self.destination.to_decorator();
@@ -171,11 +153,13 @@ pub enum Destination {
     /// Standard error.
     Stderr,
 }
+
 impl Default for Destination {
     fn default() -> Self {
         Destination::Stdout
     }
 }
+
 impl Destination {
     fn to_decorator(&self) -> Decorator {
         let maybe_term_decorator = match *self {
@@ -196,6 +180,7 @@ enum Decorator {
     PlainStdout(PlainDecorator<io::Stdout>),
     PlainStderr(PlainDecorator<io::Stderr>),
 }
+
 impl slog_term::Decorator for Decorator {
     fn with_record<F>(
         &self,
@@ -203,8 +188,8 @@ impl slog_term::Decorator for Decorator {
         logger_values: &slog::OwnedKVList,
         f: F,
     ) -> io::Result<()>
-    where
-        F: FnOnce(&mut slog_term::RecordDecorator) -> io::Result<()>,
+        where
+            F: FnOnce(&mut slog_term::RecordDecorator) -> io::Result<()>,
     {
         match *self {
             Decorator::Term(ref d) => d.with_record(record, logger_values, f),
@@ -215,12 +200,8 @@ impl slog_term::Decorator for Decorator {
 }
 
 /// The configuration of `TerminalLoggerBuilder`.
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TerminalLoggerConfig {
-    /// Log level.
-    #[serde(default)]
-    pub level: Severity,
-
     /// Log record format.
     #[serde(default)]
     pub format: Format,
@@ -240,17 +221,26 @@ pub struct TerminalLoggerConfig {
     /// Asynchronous channel size
     #[serde(default = "default_channel_size")]
     pub channel_size: usize,
+
+    #[serde(default)]
+    /// Sets the evaluation order of the KVFilter. See `EvaluationOrder` docs for details.
+    pub evaluation_order: EvaluationOrder,
+
+    /// Sets the KV Filter config (includes fallback severity).
+    pub filter_config: FilterConfig,
 }
+
 impl Config for TerminalLoggerConfig {
     type Builder = TerminalLoggerBuilder;
     fn try_to_builder(&self) -> Result<Self::Builder> {
         let mut builder = TerminalLoggerBuilder::new();
-        builder.level(self.level);
         builder.format(self.format);
         builder.source_location(self.source_location);
         builder.timezone(self.timezone);
         builder.destination(self.destination);
         builder.channel_size(self.channel_size);
+        builder.evaluation_order(self.evaluation_order);
+        builder.filter_config(self.filter_config.clone());
         Ok(builder)
     }
 }

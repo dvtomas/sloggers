@@ -22,7 +22,7 @@ slog = "2"
 slog-async = "2"
 slog-term = "2"
 slog-scope = "4"
-slog-kvfilter = "~0.6"
+slog-kvfilter = {git = "https://github.com/dvtomas/kvfilter", branch="complete-rewrite"}
 slog-stdlog = "3"
 trackable = "0.2.19"
 

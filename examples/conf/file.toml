@@ -2,7 +2,6 @@ type = "file" # terminal or file
 format = "full" # full or compact
 source_location = "module_and_line" # none or module_and_line
 timezone = "local" # utc or local
-level = "debug" # one of trace, debug, info, warning, error, critical
 
 # {timestamp} will be replaced with timestamp in the appropriate time zone
 # formatted according to the timestamp_template setting.
@@ -12,3 +11,28 @@ path = "file_{timestamp}.log"
 # The string is formatted using [strftime](https://docs.rs/chrono/0.4.6/chrono/format/strftime/index.html#specifiers)
 # Default: "%Y%m%d_%H%M", example: "20180918_1127"
 timestamp_template = "%Y%m%d_%H%M"
+
+# Truncate or append to the file when opening a log file that already exists?
+truncate = false
+
+# Async channel size, you can omit this most of the time
+channel_size = 1024
+
+[filter_config]
+# This type of filter will pass any message that has
+# - severity at least always_pass_on_severity_at_least
+#   OR
+# - any of the [[filter_config.passes]] key and value pair matches any of the
+# message key and value pair AND severity is at least severity_at_least
+type = "PassOnAnyOf"
+always_pass_on_severity_at_least = "debug"
+
+[[filter_config.passes]]
+key = "key1"
+value = "value1"
+severity_at_least = "trace"
+
+[[filter_config.passes]]
+key = "key2"
+value = "value2"
+severity_at_least = "debug"

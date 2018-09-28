@@ -12,11 +12,11 @@
 //!
 //! use sloggers::Build;
 //! use sloggers::terminal::{TerminalLoggerBuilder, Destination};
-//! use sloggers::types::Severity;
+//! use sloggers::types::{FilterConfig, Severity};
 //!
 //! # fn main() {
 //! let mut builder = TerminalLoggerBuilder::new();
-//! builder.level(Severity::Debug);
+//! builder.filter_config(FilterConfig::always_pass_on_severity_at_least(Severity::Debug));
 //! builder.destination(Destination::Stderr);
 //!
 //! let logger = builder.build().unwrap();
@@ -37,8 +37,26 @@
 //! # fn main() {
 //! let config: LoggerConfig = serdeconv::from_toml_str(r#"
 //! type = "terminal"
-//! level = "debug"
-//! destination = "stderr"
+//! format = "full"
+//! source_location = "module_and_line"
+//! timezone = "local"
+//! destination = "stdout"
+//! channel_size = 0
+//! evaluation_order = "LoggerAndMessage"
+//!
+//! [filter_config]
+//! type = "PassOnAnyOf"
+//! always_pass_on_severity_at_least = "debug"
+//!
+//! [[filter_config.passes]]
+//! key = "key1"
+//! value = "value1"
+//! severity_at_least = "trace"
+//!
+//! [[filter_config.passes]]
+//! key = "key2"
+//! value = "value2"
+//! severity_at_least = "debug"
 //! "#).unwrap();
 //!
 //! let logger = config.build_logger().unwrap();

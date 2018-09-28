@@ -16,7 +16,7 @@ impl Build for NullLoggerBuilder {
 }
 
 /// The configuration of `NullLoggerBuilder`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NullLoggerConfig {}
 impl Config for NullLoggerConfig {
     type Builder = NullLoggerBuilder;

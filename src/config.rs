@@ -3,7 +3,6 @@ use slog::Logger;
 use file::FileLoggerConfig;
 use null::NullLoggerConfig;
 use terminal::TerminalLoggerConfig;
-use types::Severity;
 use {Build, LoggerBuilder, Result};
 
 /// Configuration of a logger builder.
@@ -53,7 +52,26 @@ pub trait Config {
 /// # fn main() {
 /// let toml = r#"
 /// type = "terminal"
-/// level = "warning"
+/// format = "full"
+/// source_location = "module_and_line"
+/// timezone = "local"
+/// destination = "stdout"
+/// channel_size = 0
+/// evaluation_order = "LoggerAndMessage"
+///
+/// [filter_config]
+/// type = "PassOnAnyOf"
+/// always_pass_on_severity_at_least = "info"
+///
+/// [[filter_config.passes]]
+/// key = "key1"
+/// value = "value1"
+/// severity_at_least = "trace"
+///
+/// [[filter_config.passes]]
+/// key = "key2"
+/// value = "value2"
+/// severity_at_least = "debug"
 /// "#;
 /// let _config: LoggerConfig = serdeconv::from_toml_str(toml).unwrap();
 /// # }
@@ -70,14 +88,37 @@ pub trait Config {
 /// # fn main() {
 /// let toml = r#"
 /// type = "file"
-/// path = "/path/to/file.log"
-/// timezone = "utc"
+/// format = "full"
+/// source_location = "module_and_line"
+/// timezone = "local"
+/// timestamp_template = "%Y%m%d_%H%M"
+/// path = ""
+/// channel_size = 1024
+/// truncate = false
+/// rotate_size = 9223372036854775807
+/// rotate_keep = 8
+/// rotate_compress = false
+/// evaluation_order = "LoggerAndMessage"
+///
+/// [filter_config]
+/// type = "PassOnAnyOf"
+/// always_pass_on_severity_at_least = "info"
+///
+/// [[filter_config.passes]]
+/// key = "key1"
+/// value = "value1"
+/// severity_at_least = "trace"
+///
+/// [[filter_config.passes]]
+/// key = "key2"
+/// value = "value2"
+/// severity_at_least = "debug"
 /// "#;
 /// let _config: LoggerConfig = serdeconv::from_toml_str(toml).unwrap();
 /// # }
 /// ```
 #[allow(missing_docs)]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 #[serde(rename_all = "lowercase")]
 pub enum LoggerConfig {
@@ -85,16 +126,7 @@ pub enum LoggerConfig {
     Null(NullLoggerConfig),
     Terminal(TerminalLoggerConfig),
 }
-impl LoggerConfig {
-    /// Sets the log level of this logger.
-    pub fn set_loglevel(&mut self, level: Severity) {
-        match *self {
-            LoggerConfig::File(ref mut c) => c.level = level,
-            LoggerConfig::Null(_) => {}
-            LoggerConfig::Terminal(ref mut c) => c.level = level,
-        }
-    }
-}
+
 impl Config for LoggerConfig {
     type Builder = LoggerBuilder;
     fn try_to_builder(&self) -> Result<Self::Builder> {
@@ -107,8 +139,55 @@ impl Config for LoggerConfig {
         }
     }
 }
+
 impl Default for LoggerConfig {
     fn default() -> Self {
         LoggerConfig::Terminal(TerminalLoggerConfig::default())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    extern crate serdeconv;
+
+    use terminal::TerminalLoggerConfig;
+    use types::{FilterConfig, PassIfMatch, Severity};
+    use LoggerConfig;
+    use file::FileLoggerConfig;
+
+    fn sample_filter_config() -> FilterConfig {
+        FilterConfig::PassOnAnyOf {
+            always_pass_on_severity_at_least: Severity::Info,
+            passes: vec![
+                PassIfMatch::new("key1", "value1", Severity::Trace),
+                PassIfMatch::new("key2", "value2", Severity::Debug),
+            ],
+        }
+    }
+
+    #[test]
+    fn test_terminal_config() {
+        let mut terminal_logger_config = TerminalLoggerConfig::default();
+        terminal_logger_config.filter_config = sample_filter_config();
+        let config: LoggerConfig = LoggerConfig::Terminal(terminal_logger_config);
+
+        let config_string = serdeconv::to_toml_string(&config).unwrap();
+//        eprintln!("{}", config_string);
+
+        let config_again: LoggerConfig = serdeconv::from_toml_str(&config_string).unwrap();
+        assert_eq!(config_again, config);
+    }
+
+    #[test]
+    fn test_file_config() {
+        let mut file_logger_config = FileLoggerConfig::default();
+        file_logger_config.filter_config = sample_filter_config();
+        let config: LoggerConfig = LoggerConfig::File(file_logger_config);
+
+        let config_string = serdeconv::to_toml_string(&config).unwrap();
+//        eprintln!("{}", config_string);
+
+        let config_again: LoggerConfig = serdeconv::from_toml_str(&config_string).unwrap();
+        assert_eq!(config_again, config);
     }
 }

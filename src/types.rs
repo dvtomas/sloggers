@@ -1,7 +1,8 @@
 //! Commonly used types.
-use slog::{Drain, Level, LevelFilter};
 use std::str::FromStr;
 
+use slog::{Drain, Level, LevelFilter};
+use slog_kvfilter::FilterSpec;
 use {Error, ErrorKind};
 
 /// The severity of a log record.
@@ -34,6 +35,7 @@ pub enum Severity {
     Error,
     Critical,
 }
+
 impl Severity {
     /// Converts `Severity` to `Level`.
     pub fn as_level(&self) -> Level {
@@ -52,11 +54,13 @@ impl Severity {
         LevelFilter::new(drain, self.as_level())
     }
 }
+
 impl Default for Severity {
     fn default() -> Self {
         Severity::Info
     }
 }
+
 impl FromStr for Severity {
     type Err = Error;
     fn from_str(s: &str) -> Result<Self, Error> {
@@ -92,11 +96,13 @@ pub enum Format {
     /// Compact format.
     Compact,
 }
+
 impl Default for Format {
     fn default() -> Self {
         Format::Full
     }
 }
+
 impl FromStr for Format {
     type Err = Error;
     fn from_str(s: &str) -> Result<Self, Error> {
@@ -126,11 +132,13 @@ pub enum TimeZone {
     Utc,
     Local,
 }
+
 impl Default for TimeZone {
     fn default() -> Self {
         TimeZone::Local
     }
 }
+
 impl FromStr for TimeZone {
     type Err = Error;
     fn from_str(s: &str) -> Result<Self, Error> {
@@ -160,11 +168,13 @@ pub enum SourceLocation {
     None,
     ModuleAndLine,
 }
+
 impl Default for SourceLocation {
     fn default() -> Self {
         SourceLocation::ModuleAndLine
     }
 }
+
 impl FromStr for SourceLocation {
     type Err = Error;
     fn from_str(s: &str) -> Result<Self, Error> {
@@ -176,6 +186,96 @@ impl FromStr for SourceLocation {
                 "Undefined source code location: {:?}",
                 s
             ),
+        }
+    }
+}
+
+/// Pass a message if any key-value pair matches `key` and `value` and severity is at least `severity_at_least`.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct PassIfMatch {
+    /// Key that must match in the key-value pair
+    pub key: String,
+    /// Value that must match in the key-value pair
+    pub value: String,
+    /// Severity must be at least this in order for the message to pass
+    pub severity_at_least: Severity,
+}
+
+impl PassIfMatch {
+    /// Creates a new PassIfMatch struct
+    pub fn new(key: impl ToString, value: impl ToString, severity: Severity) -> Self {
+        PassIfMatch {
+            key: key.to_string(),
+            value: value.to_string(),
+            severity_at_least: severity,
+        }
+    }
+
+    /// Builds a `FilterSpec` from this struct
+    pub fn to_filter_spec(&self) -> FilterSpec {
+        FilterSpec::LevelAtLeast(self.severity_at_least.as_level())
+            .and(FilterSpec::match_kv(self.key.clone(), self.value.clone()))
+    }
+}
+
+/// A structure for simplified building of common KVFilter spec scenarios.
+#[serde(tag = "type")]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub enum FilterConfig {
+    /// Pass all messages with severity at least `always_pass_on_severity_at_least`
+    /// Also pass any message that matches the Key and Value of any of the variants if the message has
+    /// at least a severity for a given variant
+    PassOnAnyOf {
+        /// A message will pass if it's level is at least this
+        always_pass_on_severity_at_least: Severity,
+        /// A message will pass if it matches any of the variants
+        passes: Vec<PassIfMatch>,
+    },
+    /// You can build any FilterSpec you want with this setting. See `FilterSpec` docs for details.
+    /// Basically you can build arbitrary Bool logic expressions.
+    Custom {
+        /// Arbitrary configuration of a filter. There may be problems serializing these specifications to TOML,
+        /// consider using JSON when using `FilterConfig::Custom`.
+        filter_spec: FilterSpec
+    },
+}
+
+impl FilterConfig {
+    /// Constructs a FilterConfig that will make a message pass if it's severity is at least the specified one,
+    /// without any exceptions.
+    pub fn always_pass_on_severity_at_least(severity: Severity) -> Self {
+        FilterConfig::PassOnAnyOf {
+            always_pass_on_severity_at_least: severity,
+            passes: Vec::new(),
+        }
+    }
+}
+
+impl Default for FilterConfig {
+    fn default() -> Self {
+        FilterConfig::PassOnAnyOf {
+            always_pass_on_severity_at_least: Severity::default(),
+            passes: Vec::new(),
+        }
+    }
+}
+
+impl FilterConfig {
+    /// Converts this config into a `FilterSpec`
+    pub fn to_filter_spec(&self) -> FilterSpec {
+        match self {
+            FilterConfig::PassOnAnyOf {
+                passes,
+                always_pass_on_severity_at_least,
+            } => {
+                let variant_filters: Vec<_> = passes
+                    .iter()
+                    .map(|elem| elem.to_filter_spec())
+                    .collect();
+                FilterSpec::LevelAtLeast(always_pass_on_severity_at_least.as_level())
+                    .or(FilterSpec::any_of(&variant_filters))
+            }
+            FilterConfig::Custom { filter_spec } => filter_spec.clone(),
         }
     }
 }
