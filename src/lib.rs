@@ -71,8 +71,6 @@ extern crate serde_derive;
 extern crate slog;
 extern crate slog_async;
 extern crate slog_kvfilter;
-extern crate slog_scope;
-extern crate slog_stdlog;
 extern crate slog_term;
 #[cfg(test)]
 extern crate tempdir;
@@ -82,7 +80,6 @@ extern crate trackable;
 pub use build::{Build, LoggerBuilder};
 pub use config::{Config, LoggerConfig};
 pub use error::{Error, ErrorKind};
-pub use misc::set_stdlog_logger;
 
 pub mod file;
 pub mod null;
