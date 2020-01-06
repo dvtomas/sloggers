@@ -1,10 +1,4 @@
 //! File logger.
-use chrono::{DateTime, Local, TimeZone as ChronoTimeZone, Utc};
-use libflate::gzip::Encoder as GzipEncoder;
-use slog::{Drain, FnValue, Logger};
-use slog_async::Async;
-use slog_kvfilter::{EvaluationOrder, KVFilter, KVFilterConfig};
-use slog_term::{CompactFormat, FullFormat, PlainDecorator};
 use std::fmt::Debug;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
@@ -12,9 +6,17 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
 
-use misc::{module_and_line, timezone_to_timestamp_fn};
-use types::{FilterConfig, Format, SourceLocation, TimeZone};
+use chrono::{DateTime, Local, TimeZone as ChronoTimeZone, Utc};
+use libflate::gzip::Encoder as GzipEncoder;
+use slog::{Drain, Logger};
+use slog_async::AsyncGuard;
+use slog_kvfilter::{EvaluationOrder, KVFilterConfig};
+use slog_term::{CompactFormat, FullFormat, PlainDecorator};
+
 use {Build, Config, ErrorKind, Result};
+use misc;
+use misc::timezone_to_timestamp_fn;
+use types::{FilterConfig, Format, SourceLocation, TimeZone};
 
 /// A logger builder which build loggers that write log records to the specified file.
 ///
@@ -128,49 +130,37 @@ impl FileLoggerBuilder {
         self
     }
 
-    fn build_with_drain<D>(&self, drain: D) -> Logger
-    where
-        D: Drain + Send + 'static,
-        D::Err: Debug,
+    fn build_with_drain<D>(&self, drain: D) -> (Logger, Option<AsyncGuard>)
+        where
+            D: Drain + Send + 'static,
+            D::Err: Debug,
     {
-        // async inside, level and key value filters outside for speed
-        let drain = Async::new(drain.fuse())
-            .chan_size(self.channel_size)
-            .build()
-            .fuse();
-
-        let filter_spec = self.filter_config.to_filter_spec();
-        let kv_filter = KVFilter::new_from_config(
+        misc::build_with_drain(
             drain,
+            self.channel_size,
             KVFilterConfig {
-                filter_spec,
+                filter_spec: self.filter_config.to_filter_spec(),
                 evaluation_order: self.evaluation_order,
             },
-        );
-        match self.source_location {
-            SourceLocation::None => Logger::root(kv_filter.fuse(), o!()),
-            SourceLocation::ModuleAndLine => {
-                Logger::root(kv_filter.fuse(), o!("module" => FnValue(module_and_line)))
-            }
-        }
+            self.source_location,
+        )
     }
 }
 
 impl Build for FileLoggerBuilder {
-    fn build(&self) -> Result<Logger> {
+    fn build(&self) -> Result<(Logger, Option<AsyncGuard>)> {
         let decorator = PlainDecorator::new(self.appender.clone());
         let timestamp = timezone_to_timestamp_fn(self.timezone);
-        let logger = match self.format {
+        match self.format {
             Format::Full => {
                 let format = FullFormat::new(decorator).use_custom_timestamp(timestamp);
-                self.build_with_drain(format.build())
+                Ok(self.build_with_drain(format.build()))
             }
             Format::Compact => {
                 let format = CompactFormat::new(decorator).use_custom_timestamp(timestamp);
-                self.build_with_drain(format.build())
+                Ok(self.build_with_drain(format.build()))
             }
-        };
-        Ok(logger)
+        }
     }
 }
 
@@ -505,18 +495,20 @@ fn default_timestamp_template() -> String {
 
 #[cfg(test)]
 mod tests {
-    use chrono::NaiveDateTime;
-    use std::thread;
+    use std::{mem, thread};
     use std::time::Duration;
+
+    use chrono::NaiveDateTime;
     use tempdir::TempDir;
 
-    use super::*;
     use {Build, ErrorKind};
+
+    use super::*;
 
     #[test]
     fn file_rotation_works() {
         let dir = TempDir::new("sloggers_test").unwrap();
-        let logger = FileLoggerBuilder::new(dir.path().join("foo.log"))
+        let (logger, guard) = FileLoggerBuilder::new(dir.path().join("foo.log"))
             .rotate_size(128)
             .rotate_keep(2)
             .build()
@@ -546,12 +538,14 @@ mod tests {
         assert!(dir.path().join("foo.log.1").exists());
         assert!(dir.path().join("foo.log.2").exists());
         assert!(!dir.path().join("foo.log.3").exists());
+
+        mem::drop(guard)
     }
 
     #[test]
     fn file_gzip_rotation_works() {
         let dir = TempDir::new("sloggers_test").unwrap();
-        let logger = FileLoggerBuilder::new(dir.path().join("foo.log"))
+        let (logger, guard) = FileLoggerBuilder::new(dir.path().join("foo.log"))
             .rotate_size(128)
             .rotate_keep(2)
             .rotate_compress(true)
@@ -582,6 +576,8 @@ mod tests {
         assert!(dir.path().join("foo.log.1.gz").exists());
         assert!(dir.path().join("foo.log.2.gz").exists());
         assert!(!dir.path().join("foo.log.3.gz").exists());
+
+        mem::drop(guard)
     }
 
     #[test]

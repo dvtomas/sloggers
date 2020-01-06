@@ -1,9 +1,10 @@
 use slog::Logger;
+use slog_async::AsyncGuard;
 
+use {Build, LoggerBuilder, Result};
 use file::FileLoggerConfig;
 use null::NullLoggerConfig;
 use terminal::TerminalLoggerConfig;
-use {Build, LoggerBuilder, Result};
 
 /// Configuration of a logger builder.
 pub trait Config {
@@ -14,7 +15,7 @@ pub trait Config {
     fn try_to_builder(&self) -> Result<Self::Builder>;
 
     /// Builds a logger with this configuration.
-    fn build_logger(&self) -> Result<Logger> {
+    fn build_logger(&self) -> Result<(Logger, Option<AsyncGuard>)> {
         let builder = track!(self.try_to_builder())?;
         let logger = track!(builder.build())?;
         Ok(logger)
@@ -148,9 +149,9 @@ mod tests {
     extern crate serdeconv;
 
     use file::FileLoggerConfig;
+    use LoggerConfig;
     use terminal::TerminalLoggerConfig;
     use types::{FilterConfig, PassIfMatch, Severity};
-    use LoggerConfig;
 
     fn sample_filter_config() -> FilterConfig {
         FilterConfig::PassOnAnyOf {

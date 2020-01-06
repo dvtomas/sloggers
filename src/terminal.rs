@@ -1,14 +1,16 @@
 //! Terminal logger.
-use slog::{self, Drain, FnValue, Logger};
-use slog_async::Async;
-use slog_kvfilter::{EvaluationOrder, KVFilter, KVFilterConfig};
-use slog_term::{self, CompactFormat, FullFormat, PlainDecorator, TermDecorator};
 use std::fmt::Debug;
 use std::io;
 
-use misc::{module_and_line, timezone_to_timestamp_fn};
-use types::{FilterConfig, Format, SourceLocation, TimeZone};
+use slog::{self, Drain, Logger};
+use slog_async::AsyncGuard;
+use slog_kvfilter::{EvaluationOrder, KVFilterConfig};
+use slog_term::{self, CompactFormat, FullFormat, PlainDecorator, TermDecorator};
+
 use {Build, Config, Result};
+use misc::timezone_to_timestamp_fn;
+use misc;
+use types::{FilterConfig, Format, SourceLocation, TimeZone};
 
 /// A logger builder which build loggers that output log records to the terminal.
 ///
@@ -80,32 +82,20 @@ impl TerminalLoggerBuilder {
         self
     }
 
-    fn build_with_drain<D>(&self, drain: D) -> Logger
-    where
-        D: Drain + Send + 'static,
-        D::Err: Debug,
+    fn build_with_drain<D>(&self, drain: D) -> (Logger, Option<AsyncGuard>)
+        where
+            D: Drain + Send + 'static,
+            D::Err: Debug,
     {
-        // async inside, level and key value filters outside for speed
-        let drain = Async::new(drain.fuse())
-            .chan_size(self.channel_size)
-            .build()
-            .fuse();
-
-        let filter_spec = self.filter_config.to_filter_spec();
-        let kv_filter = KVFilter::new_from_config(
+        misc::build_with_drain(
             drain,
+            self.channel_size,
             KVFilterConfig {
-                filter_spec,
+                filter_spec: self.filter_config.to_filter_spec(),
                 evaluation_order: self.evaluation_order,
             },
-        );
-
-        match self.source_location {
-            SourceLocation::None => Logger::root(kv_filter.fuse(), o!()),
-            SourceLocation::ModuleAndLine => {
-                Logger::root(kv_filter.fuse(), o!("module" => FnValue(module_and_line)))
-            }
-        }
+            self.source_location,
+        )
     }
 }
 
@@ -116,20 +106,19 @@ impl Default for TerminalLoggerBuilder {
 }
 
 impl Build for TerminalLoggerBuilder {
-    fn build(&self) -> Result<Logger> {
+    fn build(&self) -> Result<(Logger, Option<AsyncGuard>)> {
         let decorator = self.destination.to_decorator();
         let timestamp = timezone_to_timestamp_fn(self.timezone);
-        let logger = match self.format {
+        match self.format {
             Format::Full => {
                 let format = FullFormat::new(decorator).use_custom_timestamp(timestamp);
-                self.build_with_drain(format.build())
+                Ok(self.build_with_drain(format.build()))
             }
             Format::Compact => {
                 let format = CompactFormat::new(decorator).use_custom_timestamp(timestamp);
-                self.build_with_drain(format.build())
+                Ok(self.build_with_drain(format.build()))
             }
-        };
-        Ok(logger)
+        }
     }
 }
 
@@ -188,8 +177,8 @@ impl slog_term::Decorator for Decorator {
         logger_values: &slog::OwnedKVList,
         f: F,
     ) -> io::Result<()>
-    where
-        F: FnOnce(&mut slog_term::RecordDecorator) -> io::Result<()>,
+        where
+            F: FnOnce(&mut dyn slog_term::RecordDecorator) -> io::Result<()>,
     {
         match *self {
             Decorator::Term(ref d) => d.with_record(record, logger_values, f),

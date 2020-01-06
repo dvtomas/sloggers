@@ -6,7 +6,10 @@ extern crate sloggers;
 #[macro_use]
 extern crate trackable;
 
+use std::mem;
+
 use clap::{App, Arg};
+
 use sloggers::{Build, Config, LoggerConfig};
 
 fn main() {
@@ -17,6 +20,7 @@ fn main() {
 
     let config: LoggerConfig = track_try_unwrap!(serdeconv::from_toml_file(config_file));
     let builder = track_try_unwrap!(config.try_to_builder());
-    let logger = track_try_unwrap!(builder.build());
+    let (logger, guard) = track_try_unwrap!(builder.build());
     info!(logger, "Hello World!");
+    mem::drop(guard)
 }

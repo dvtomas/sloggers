@@ -19,8 +19,9 @@
 //! builder.filter_config(FilterConfig::always_pass_on_severity_at_least(Severity::Debug));
 //! builder.destination(Destination::Stderr);
 //!
-//! let logger = builder.build().unwrap();
+//! let (logger, guard) = builder.build().unwrap();
 //! info!(logger, "Hello World!");
+//! std::mem::drop(guard);
 //! # }
 //! ```
 //!
@@ -57,11 +58,11 @@
 //! severity_at_least = "debug"
 //! "#).unwrap();
 //!
-//! let logger = config.build_logger().unwrap();
+//! let (logger, guard) = config.build_logger().unwrap();
 //! info!(logger, "Hello World!");
+//! std::mem::drop(guard);
 //! # }
 //! ```
-#![warn(missing_docs)]
 extern crate chrono;
 extern crate libflate;
 extern crate serde;
