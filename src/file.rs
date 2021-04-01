@@ -211,11 +211,16 @@ impl FileAppender {
             if self.truncate {
                 file_builder.truncate(true);
             }
-            let file = file_builder
-                .append(!self.truncate)
-                .write(true)
-                .open(&self.path)?;
-            self.written_size = file.metadata()?.len();
+            let file =
+                file_builder
+                    .append(!self.truncate)
+                    .write(true)
+                    .open(&self.path)
+                    .map_err(|e| io::Error::new(e.kind(), format!("Open log file `{}`: {}", &self.path.to_string_lossy(), e)))?;
+            self.written_size =
+                file.metadata()
+                    .map_err(|e| io::Error::new(e.kind(), format!("Open log file `{}`: {}", &self.path.to_string_lossy(), e)))?
+                    .len();
             self.file = Some(file);
         }
         Ok(())
